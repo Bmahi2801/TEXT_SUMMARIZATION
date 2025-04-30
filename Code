@@ -1,0 +1,173 @@
+# 1 Importing the required Libraries
+import numpy as np
+import pandas as pd
+import warnings
+import re
+import nltk
+from nltk import word_tokenize
+from nltk.tokenize import sent_tokenize
+from textblob import TextBlob
+import string
+from string import punctuation
+from nltk.corpus import stopwords
+from statistics import mean
+from heapq import nlargest
+from wordcloud import WordCloud
+import seaborn as sns
+import matplotlib.pyplot as plt
+nltk.download('stopwords')
+stop_words = set(stopwords.words('english'))
+punctuation = punctuation + '\n' + '—' + '“' + ',' + '”' + '‘' + '-' + '’'
+warnings.filterwarnings('ignore')
+import kagglehub
+path = kagglehub.dataset_download("cymerunaslam/allthenews")
+print("Path to dataset files:", path)
+df_1 = pd.read_csv("/root/.cache/kagglehub/datasets/cymerunaslam/allthenews/versions/1/articles1.csv")
+df_2 = pd.read_csv("/root/.cache/kagglehub/datasets/cymerunaslam/allthenews/versions/1/articles2.csv")
+df_3 = pd.read_csv("/root/.cache/kagglehub/datasets/cymerunaslam/allthenews/versions/1/articles3.csv")
+df_1.columns == df_2.columns
+df_2.columns == df_3.columns
+d = [df_1, df_2, df_3]
+df = pd.concat(d, keys = ['x', 'y', 'z'])
+df.rename(columns = {'content' : 'article'}, inplace = True)
+df.head()
+print ("The shape of the dataset : ", df.shape)
+df.drop(columns = ['Unnamed: 0'], inplace = True)
+df.head()
+plt.rcParams['figure.figsize'] = [15, 8]
+sns.set(font_scale = 1.2, style = 'darkgrid')
+if isinstance(df.index, pd.MultiIndex):
+    df = df.reset_index()
+sns_year = sns.countplot(x='publication', data=df, color='darkcyan')
+plt.xticks(rotation=45)
+sns_year.set(xlabel="Publication", ylabel="Count", title="Distribution of Publication according")
+df['year'] = df['year'].replace("https://www.washingtonpost.com/outlook/tale-of-a-woman-who-died-and-a-woman-who-killed-in-the-northern-ireland-conflict/2019/03/08/59e75dd4-2ecd-11e9-8ad3-9a5b113ecd3c_story.html", 2019)
+df['year'].value_counts()
+df['author'].value_counts()
+import matplotlib.pyplot as plt
+import seaborn as sns
+plt.rcParams['figure.figsize'] = [15, 15]
+sns.set(font_scale=1, style='whitegrid')
+df_author = df['author'].value_counts().head(80)
+sns.barplot(x=df_author.values, y=df_author.index)
+plt.xlabel("Count")
+plt.ylabel("Author")
+plt.title("The Most Frequent Authors")
+plt.show()
+df['author'] = df['author'].replace("The Associated Press", "Associated Press")
+# 3 Making the Article Summarizer
+contractions_dict = {
+"ain't": "am not", "aren't": "are not", "can't": "cannot", "can't've": "cannot have", "'cause": "because",
+...  # Keeping this as is; the full dictionary was not trimmed here
+}
+contractions_re = re.compile('(%s)' % '|'.join(contractions_dict.keys()))
+def cleanhtml(raw_html):
+    cleanr = re.compile('<.*?>')
+    cleantext = re.sub(cleanr, '', raw_html)
+    return cleantext
+def expand_contractions(s, contractions_dict=contractions_dict):
+    def replace(match):
+        return contractions_dict[match.group(0)]
+    return contractions_re.sub(replace, s)
+def preprocessing(article):
+    global article_sent
+    article = article.str.lower()
+    article = article.apply(lambda x: cleanhtml(x))
+    article = article.apply(lambda x: re.sub('\S+@\S+','', x))
+    article = article.apply(lambda x: re.sub("((http\://|https\://|ftp\://)|(www.))+(([a-zA-Z0-9\.-]+\.[a-zA-Z]{2,4})|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}))(/[a-zA-Z0-9%:/-_\?\.'~]*)?",'', x))
+    article = article.apply(lambda x: x.replace("\xa0", " "))
+    article = article.apply(lambda x: expand_contractions(x))
+    article = article.apply(lambda x: x.replace("'s", ''))
+    article = article.apply(lambda x: x.replace('’s', ''))
+    article = article.apply(lambda x: x.replace("\'s", ''))
+    article = article.apply(lambda x: x.replace("\’s", ''))
+    article = article.apply(lambda x: re.sub(' +', ' ',x))
+    article_sent = article.copy()
+    article = article.apply(lambda x: ''.join(word for word in x if word not in punctuation))
+    article = article.apply(lambda x: re.sub(' +', ' ',x))
+    article = article.apply(lambda x: ' '.join(word for word in x.split() if word not in stop_words))
+    return article
+def normalize(li_word):
+    global normalized_freq
+    normalized_freq = []
+    for dictionary in li_word:
+        max_frequency = max(dictionary.values())
+        for word in dictionary.keys():
+            dictionary[word] = dictionary[word]/max_frequency
+        normalized_freq.append(dictionary)
+    return normalized_freq
+def word_frequency(article_word):
+    word_frequency = {}
+    li_word = []
+for sentence in article_word:
+        for word in word_tokenize(sentence):
+            if word not in word_frequency.keys():
+                word_frequency[word] = 1
+            else:
+                word_frequency[word] += 1
+        li_word.append(word_frequency)
+        word_frequency = {}
+    normalize(li_word)
+    return normalized_freq
+def sentence_score(li):
+    global sentence_score_list
+    sentence_score = {}
+    sentence_score_list = []
+    for list_, dictionary in zip(li, normalized_freq):
+        for sent in list_:
+            for word in word_tokenize(sent):
+                if word in dictionary.keys():
+                    if sent not in sentence_score.keys():
+                        sentence_score[sent] = dictionary[word]
+                    else:
+                        sentence_score[sent] += dictionary[word]
+        sentence_score_list.append(sentence_score)
+        sentence_score = {}
+    return sentence_score_list
+def sent_token(article_sent):
+    sentence_list = []
+    sent_token = []
+    for sent in article_sent:
+        token = sent_tokenize(sent)
+        for sentence in token:
+            token_2 = ''.join(word for word in sentence if word not in punctuation)
+            token_2 = re.sub(' +', ' ',token_2)
+            sent_token.append(token_2)
+        sentence_list.append(sent_token)
+        sent_token = []
+    sentence_score(sentence_list)
+    return sentence_score_list
+def summary(sentence_score_OwO):
+    summary_list = []
+    for summ in sentence_score_OwO:
+        select_length = int(len(summ)*0.25)
+        summary_ = nlargest(select_length, summ, key = summ.get)
+        summary_list.append(".".join(summary_))
+    return summary_list
+def make_series(art):
+    global dataframe
+    data_dict = {'article' : [art]}
+    dataframe = pd.DataFrame(data_dict)['article']
+    return dataframe
+def article_summarize(artefact):
+    if type(artefact) != pd.Series:
+        artefact = make_series(artefact)
+df = preprocessing(artefact)
+word_normalization = word_frequency(df)
+    sentence_score_OwO = sent_token(article_sent)
+    summarized_article = summary(sentence_score_OwO)
+    return summarized_article
+import nltk
+nltk.download('punkt_tab')
+def word_cloud(art):
+    art_ = make_series(art)
+    OwO = preprocessing(art_)
+    wordcloud_ = WordCloud(height=500, width=1000, background_color='white').generate(art)
+    plt.figure(figsize=(15, 10))
+    plt.imshow(wordcloud_, interpolation='bilinear')
+    plt.axis('off')
+summaries = article_summarize(df['article'][0:100])
+print ("The Actual length of the article is : ", len(df['article'][0]))
+df['article'][0]
+print ("The length of the summarized article is : ", len(summaries[0]))
+summaries[0]
